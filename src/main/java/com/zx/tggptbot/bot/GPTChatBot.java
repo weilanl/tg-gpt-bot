@@ -26,7 +26,7 @@ public class GPTChatBot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
-        myGptService.chat(update);
+        myGptService.onMessageReceive(update);
     }
 
     @Override
