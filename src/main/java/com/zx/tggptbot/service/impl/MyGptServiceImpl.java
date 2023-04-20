@@ -4,6 +4,8 @@ import com.theokanning.openai.completion.chat.ChatCompletionChoice;
 import com.theokanning.openai.completion.chat.ChatCompletionRequest;
 import com.theokanning.openai.completion.chat.ChatMessage;
 import com.theokanning.openai.image.CreateImageRequest;
+import com.theokanning.openai.image.Image;
+import com.theokanning.openai.image.ImageResult;
 import com.theokanning.openai.service.OpenAiService;
 import com.zx.tggptbot.bot.GPTChatBot;
 import com.zx.tggptbot.service.MyGptService;
@@ -14,6 +16,8 @@ import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.bots.DefaultBotOptions;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
@@ -21,6 +25,10 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
 import javax.annotation.PostConstruct;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -78,59 +86,132 @@ public class MyGptServiceImpl implements MyGptService {
     }
 
     @Override
-    public void chat(Update update) {
-        CompletableFuture.supplyAsync(() -> {
-            List<ChatMessage> chatMessages = new ArrayList<>();
-            //receive message
-            Message message = update.getMessage();
-            if (message != null) {
-                User from = message.getFrom();
-                log.info("from {}:{}", from.getUserName(), message.getText());
-                String text = message.getText();
-                chatMessages.add(new ChatMessage("user", text));
-            } else {
-                log.info("on update:message is null");
-                return sendMessage(update.getMessage().getChatId(), "you cannot send a empty message");
-            }
-            //build a request
-            ChatCompletionRequest completionRequest = ChatCompletionRequest.builder()
-                    .messages(chatMessages)
-                    .model(this.gptModel)
-                    .maxTokens(this.maxTokens)
-                    .build();
-            List<ChatCompletionChoice> completionChoiceList = openAiService.createChatCompletion(completionRequest).getChoices();
-            StringBuilder stringBuffer = new StringBuilder();
-            for (ChatCompletionChoice completionChoice : completionChoiceList) {
-                String content = completionChoice.getMessage().getContent();
-                stringBuffer.append(content);
-            }
-            //send message
-            return sendMessage(update.getMessage().getChatId(), stringBuffer.toString());
-        }, executorService)
-        .whenComplete((s, e) -> log.info("create chat success:{}", s))
-        .exceptionally(e -> {
-            log.error("create chat failed", e);
-            return sendMessage(update.getMessage().getChatId(), "sorry, something wrong, please try again later");
-        });
+    public void onMessageReceive(Update update) {
+        Message message = update.getMessage();
+        String text;
+        if (message != null) {
+            User from = message.getFrom();
+            log.info("from {}:{}", from.getUserName(), message.getText());
+            text = message.getText();
+        } else {
+            log.info("on update:message is null");
+            sendTextMessage(createSendMessageByOpenai(update.getMessage().getChatId(), "you cannot send a empty message"));
+            return;
+        }
+        if (text.startsWith("/image")) {
+            CompletableFuture.supplyAsync(() -> createSendPhotoByOpenai(update.getMessage().getChatId(), text.replace("/image", "")), executorService)
+                    .thenApply(this::sendPhotoMessage)
+                    .whenComplete((s, e) -> {
+                        if (e == null) {
+                            log.info("create chat success:{}", s);
+                        }
+                    })
+                    .exceptionally(e -> {
+                        log.error("create chat failed", e);
+                        sendTextMessage(createSendMessageByOpenai(update.getMessage().getChatId(), "sorry, something wrong, please try again later"));
+                        return null;
+                    });
+        } else {
+            CompletableFuture.supplyAsync(() -> createSendMessageByOpenai(update.getMessage().getChatId(), text), executorService)
+                    .thenApply(this::sendTextMessage)
+                    .whenComplete((s, e) -> {
+                        if (e == null) {
+                            log.info("create chat success:{}", s);
+                        }
+                    })
+                    .exceptionally(e -> {
+                        log.error("create chat failed", e);
+                        sendTextMessage(createSendMessageByOpenai(update.getMessage().getChatId(), "sorry, something wrong, please try again later"));
+                        return null;
+                    });
+        }
     }
 
-    /**
-     * send message to user
-     * @param chatId chat id
-     * @param text message
-     * @return
-     */
-    private SendMessage sendMessage(Long chatId, String text) {
+    public SendMessage createSendMessageByOpenai(Long chatId, String prompt) {
+        List<ChatMessage> chatMessages = new ArrayList<>();
+        chatMessages.add(new ChatMessage("user", prompt));
+        //create chat completion request
+        ChatCompletionRequest completionRequest = ChatCompletionRequest.builder()
+                .messages(chatMessages)
+                .model(this.gptModel)
+                .maxTokens(this.maxTokens)
+                .build();
+        //send request
+        List<ChatCompletionChoice> completionChoiceList = openAiService.createChatCompletion(completionRequest).getChoices();
+        StringBuilder stringBuffer = new StringBuilder();
+        for (ChatCompletionChoice completionChoice : completionChoiceList) {
+            String content = completionChoice.getMessage().getContent();
+            stringBuffer.append(content);
+        }
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(chatId);
-        sendMessage.setText(text);
+        sendMessage.setText(stringBuffer.toString());
+        return sendMessage;
+    }
+
+    public SendPhoto createSendPhotoByOpenai(Long chatId, String prompt) {
+        //create image request
+        CreateImageRequest createImageRequest = CreateImageRequest.builder()
+                .prompt(prompt)
+                .build();
+        //send request
+        ImageResult imageResult = openAiService.createImage(createImageRequest);
+        if (imageResult != null) {
+            String imageUrl = null;
+            for (Image image : imageResult.getData()) {
+                imageUrl = image.getUrl();
+                //only receive the first image TODO support multi image
+                break;
+            }
+            if (imageUrl == null) {
+                return null;
+            }
+            //create sendPhoto
+            SendPhoto sendPhoto = new SendPhoto();
+            sendPhoto.setChatId(chatId);
+            InputFile inputFile = new InputFile();
+            try {
+                //download image
+                log.info("download image from {}", imageUrl);
+                URL url = new URL(imageUrl);
+                URLConnection conn = url.openConnection();
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+                InputStream stream = conn.getInputStream();
+                inputFile.setMedia(stream, System.currentTimeMillis() + ".png");
+                sendPhoto.setPhoto(inputFile);
+                log.info("download success");
+                return sendPhoto;
+            } catch (IOException e) {
+                log.error("download failed:{}", e.getLocalizedMessage(), e);
+                return null;
+            }
+        } else {
+            return null;
+        }
+    }
+
+    public SendMessage sendTextMessage(SendMessage sendMessage) {
+        if (sendMessage == null) {
+            throw new RuntimeException("send message is null");
+        }
         try {
             this.gptChatBot.execute(sendMessage);
         } catch (TelegramApiException e) {
-            e.printStackTrace();
-            log.error("message send failed:{}", e.getLocalizedMessage());
+            log.error("text message send failed:{}", e.getLocalizedMessage(), e);
         }
         return sendMessage;
+    }
+
+    public SendPhoto sendPhotoMessage(SendPhoto sendPhoto) {
+        if (sendPhoto == null) {
+            throw new RuntimeException("send photo is null");
+        }
+        try {
+            this.gptChatBot.execute(sendPhoto);
+        } catch (TelegramApiException e) {
+            log.error("text message send failed:{}", e.getLocalizedMessage(), e);
+        }
+        return sendPhoto;
     }
 
     @Override
