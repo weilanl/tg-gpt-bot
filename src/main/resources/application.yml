@@ -1,0 +1,21 @@
+telegram:
+  bot:
+    botName: your_bot_name
+    botToken: your_bot_token
+  proxy:
+    #If your network environment is unable to access the telegram server, you can enable the proxy
+    enable: false
+    host: your_proxy_host
+    port: your_proxy_port
+openai:
+  #You can get your openai api key from https://platform.openai.com/account/api-keys
+  token: your_openai_api_key
+  gpt:
+    #You can get the model id and max tokens from https://platform.openai.com/docs/models
+    model: gpt-3.5-turbo
+    maxTokens: 2048
+  proxy:
+    #If your network environment is unable to access the openai server, you can enable the proxy
+    enable: false
+    host: your_proxy_host
+    port: your_proxy_port
