@@ -98,6 +98,9 @@ public class MyGptServiceImpl implements MyGptService {
             sendTextMessage(createSendMessageByOpenai(update.getMessage().getChatId(), "you cannot send a empty message"));
             return;
         }
+        SendMessage defaultErrorMessage = new SendMessage();
+        defaultErrorMessage.setChatId(update.getMessage().getChatId());
+        defaultErrorMessage.setText("sorry, something wrong, please try again later");
         if (text.startsWith("/image")) {
             CompletableFuture.supplyAsync(() -> createSendPhotoByOpenai(update.getMessage().getChatId(), text.replace("/image", "")), executorService)
                     .thenApply(this::sendPhotoMessage)
@@ -108,7 +111,7 @@ public class MyGptServiceImpl implements MyGptService {
                     })
                     .exceptionally(e -> {
                         log.error("create chat failed", e);
-                        sendTextMessage(createSendMessageByOpenai(update.getMessage().getChatId(), "sorry, something wrong, please try again later"));
+                        sendTextMessage(defaultErrorMessage);
                         return null;
                     });
         } else {
@@ -121,13 +124,16 @@ public class MyGptServiceImpl implements MyGptService {
                     })
                     .exceptionally(e -> {
                         log.error("create chat failed", e);
-                        sendTextMessage(createSendMessageByOpenai(update.getMessage().getChatId(), "sorry, something wrong, please try again later"));
+                        sendTextMessage(defaultErrorMessage);
                         return null;
                     });
         }
     }
 
     public SendMessage createSendMessageByOpenai(Long chatId, String prompt) {
+        if(prompt == null || prompt.trim().isEmpty()){
+            return null;
+        }
         List<ChatMessage> chatMessages = new ArrayList<>();
         chatMessages.add(new ChatMessage("user", prompt));
         //create chat completion request
@@ -150,6 +156,9 @@ public class MyGptServiceImpl implements MyGptService {
     }
 
     public SendPhoto createSendPhotoByOpenai(Long chatId, String prompt) {
+        if(prompt == null || prompt.trim().isEmpty()){
+            return null;
+        }
         //create image request
         CreateImageRequest createImageRequest = CreateImageRequest.builder()
                 .prompt(prompt)
