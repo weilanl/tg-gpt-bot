@@ -30,8 +30,11 @@ import java.io.InputStream;
 import java.net.URL;
 import java.net.URLConnection;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -41,6 +44,8 @@ import java.util.concurrent.ExecutorService;
 @Service
 @Slf4j
 public class MyGptServiceImpl implements MyGptService {
+    public static final String ROLE_BOT = "assistant";
+    public static final String ROLE_USER = "user";
     @Value("${telegram.bot.botToken}")
     private String botToken;
     @Value("${telegram.bot.botName}")
@@ -55,12 +60,15 @@ public class MyGptServiceImpl implements MyGptService {
     private String gptModel;
     @Value("${openai.gpt.maxTokens}")
     private Integer maxTokens;
+    @Value("${openai.gpt.maxChatHis}")
+    private Integer maxChatHis;
 
     @Autowired
     private OpenAiService openAiService;
     @Autowired
     private ExecutorService executorService;
     private GPTChatBot gptChatBot;
+    private Map<String, List<ChatMessage>> chatHistory = new ConcurrentHashMap<>();
 
     /**
      * register a bot
@@ -87,20 +95,21 @@ public class MyGptServiceImpl implements MyGptService {
 
     @Override
     public void onMessageReceive(Update update) {
-        Message message = update.getMessage();
-        String text;
-        if (message != null) {
-            User from = message.getFrom();
-            log.info("from {}:{}", from.getUserName(), message.getText());
-            text = message.getText();
-        } else {
-            log.info("on update:message is null");
-            sendTextMessage(createSendMessageByOpenai(update.getMessage().getChatId(), "you cannot send a empty message"));
-            return;
-        }
         SendMessage defaultErrorMessage = new SendMessage();
         defaultErrorMessage.setChatId(update.getMessage().getChatId());
         defaultErrorMessage.setText("sorry, something wrong, please try again later");
+        Message message = update.getMessage();
+        String text;
+        String username;
+        if (message != null) {
+            username = message.getFrom().getUserName();
+            log.info("from {}:{}", username, message.getText());
+            text = message.getText();
+        } else {
+            log.info("on update:message is null");
+            sendTextMessage(defaultErrorMessage);
+            return;
+        }
         if (text.startsWith("/image")) {
             CompletableFuture.supplyAsync(() -> createSendPhotoByOpenai(update.getMessage().getChatId(), text.replace("/image", "")), executorService)
                     .thenApply(this::sendPhotoMessage)
@@ -115,7 +124,8 @@ public class MyGptServiceImpl implements MyGptService {
                         return null;
                     });
         } else {
-            CompletableFuture.supplyAsync(() -> createSendMessageByOpenai(update.getMessage().getChatId(), text), executorService)
+            addChatHistory(message.getFrom().getUserName(), ROLE_USER, text);
+            CompletableFuture.supplyAsync(() -> createSendMessageByOpenai(username, update.getMessage().getChatId(), text), executorService)
                     .thenApply(this::sendTextMessage)
                     .whenComplete((s, e) -> {
                         if (e == null) {
@@ -130,12 +140,18 @@ public class MyGptServiceImpl implements MyGptService {
         }
     }
 
-    public SendMessage createSendMessageByOpenai(Long chatId, String prompt) {
-        if(prompt == null || prompt.trim().isEmpty()){
+    public SendMessage createSendMessageByOpenai(String username, Long chatId, String prompt) {
+        if (prompt == null || prompt.trim().isEmpty()) {
             return null;
         }
-        List<ChatMessage> chatMessages = new ArrayList<>();
-        chatMessages.add(new ChatMessage("user", prompt));
+        List<ChatMessage> chatMessages;
+        if(username == null) {
+            chatMessages = new ArrayList<>();
+            chatMessages.add(new ChatMessage(ROLE_USER, prompt));
+        } else {
+            //get chat history
+            chatMessages = getChatHistory(username);
+        }
         //create chat completion request
         ChatCompletionRequest completionRequest = ChatCompletionRequest.builder()
                 .messages(chatMessages)
@@ -152,11 +168,12 @@ public class MyGptServiceImpl implements MyGptService {
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(chatId);
         sendMessage.setText(stringBuffer.toString());
+        addChatHistory(username, ROLE_BOT, stringBuffer.toString());
         return sendMessage;
     }
 
     public SendPhoto createSendPhotoByOpenai(Long chatId, String prompt) {
-        if(prompt == null || prompt.trim().isEmpty()){
+        if (prompt == null || prompt.trim().isEmpty()) {
             return null;
         }
         //create image request
@@ -233,4 +250,28 @@ public class MyGptServiceImpl implements MyGptService {
         return this.botToken;
     }
 
+    /**
+     * add chat history
+     * @param username user name
+     * @param role role
+     * @param message message
+     */
+    private void addChatHistory(String username, String role, String message) {
+        List<ChatMessage> chatMessages = this.chatHistory.computeIfAbsent(username, k -> Collections.synchronizedList(new ArrayList<>()));
+        if(chatMessages.size() < this.maxChatHis) {
+            chatMessages.add(new ChatMessage(role, message));
+        } else {
+            chatMessages.remove(0);
+            chatMessages.add(new ChatMessage(role, message));
+        }
+    }
+
+    /**
+     * get chat history
+     * @param username user name
+     * @return chat history
+     */
+    private List<ChatMessage> getChatHistory(String username) {
+        return this.chatHistory.get(username);
+    }
 }

@@ -18,11 +18,12 @@ public interface MyGptService {
 
     /**
      * creaete a text message by openai
+     * @param username
      * @param chatId
      * @param prompt
      * @return
      */
-    SendMessage createSendMessageByOpenai(Long chatId, String prompt);
+    SendMessage createSendMessageByOpenai(String username, Long chatId, String prompt);
 
     /**
      * create a photo message by openai
