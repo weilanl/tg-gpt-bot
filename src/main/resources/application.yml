@@ -14,6 +14,7 @@ openai:
     #You can get the model id and max tokens from https://platform.openai.com/docs/models
     model: gpt-3.5-turbo
     maxTokens: 2048
+    maxChatHis: 5
   proxy:
     #If your network environment is unable to access the openai server, you can enable the proxy
     enable: false
