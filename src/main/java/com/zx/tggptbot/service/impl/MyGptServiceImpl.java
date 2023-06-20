@@ -156,7 +156,7 @@ public class MyGptServiceImpl implements MyGptService {
         ChatCompletionRequest completionRequest = ChatCompletionRequest.builder()
                 .messages(chatMessages)
                 .model(this.gptModel)
-                .maxTokens(this.maxTokens)
+//                .maxTokens(this.maxTokens)
                 .build();
         //send request
         List<ChatCompletionChoice> completionChoiceList = openAiService.createChatCompletion(completionRequest).getChoices();
